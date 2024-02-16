@@ -1,7 +1,7 @@
 # ASCEND <img align="right" width="200" src="https://github.com/sunyatin/ASCEND/blob/master/7.jpeg">
 ***ASCEND*** (**A**llele **S**haring **C**orrelation for the **E**stimation of **N**onequilibrium **D**emography) is a method to estimate the age and intensity of founder events/bottlenecks using population genotype data and a recombination map.
 
-:arrow_right: **Current version:** 10.1.1 [09.12.2022]
+:arrow_right: **Current version:** 10.2.0 [01.30.2024]
 
 - [Tutorial](#tutorial)
 - [Installation](#installation)
@@ -37,9 +37,13 @@ ASCEND is a Python3 script and does not require prior installation apart specifi
 
 `pip3 install --user scipy`
 
+For experimental PLINK 1.9 binary input support:
+
+`pip3 install --user bed-reader`
+
 # :heavy_exclamation_mark: Requirements
 
-For optimal use, ASCEND requires that your population is comprised of at least 5 samples. ASCEND is based on EIGENSTRAT-formatted input files and **requires genetic positions**, provided in the 3rd column of the .snp file (genetic positions can be given either in Morgans or centiMorgans). The method currently does not support packed formats like packedancestrymap, packedped, packedeigenstrat, etc. Please use `convertf` to convert the data to eigenstrat format before use.
+For optimal use, ASCEND requires that your population is comprised of at least 5 samples. ASCEND is based on EIGENSTRAT-formatted input files and **requires genetic positions**, provided in the 3rd column of the .snp file (genetic positions can be given either in Morgans or centiMorgans). The method currently does not support packed formats like packedancestrymap, packedped, packedeigenstrat, etc. Please use `convertf` to convert the data to eigenstrat format before use. Experimental support has also been added for PLINK1.9 binary format (.bed, .bim).
 
 Since ASCEND relies on the recombination map, make sure your SNPs have the most accurate genetic positions (see https://github.com/sunyatin/itara/blob/master/liftover.py to lift positions over a recombination map).
 
@@ -56,6 +60,8 @@ The EIGENSTRAT format is comprised of three files:
 You can convert your file into EIGENSTRAT using the CONVERTF program (see https://github.com/argriffing/eigensoft/tree/master/CONVERTF).
 
 Note that although the .geno file must **not** be binary, but it can be gzip-compressed.
+
+Experimental support has been added for [PLINK 1.9 binary format (.bed, .bim)](https://www.cog-genomics.org/plink/1.9/formats#bed). Use at your own risk. Note that a `.ind` file is still required by ASCEND, as the `.fam` file produced by PLINK does not necessarily contain population information. Also, if your initial inputs are in VCF format, make sure to use the `--keep-allele-order` flag for `plink --vcf [VCF] --make-bed` to ensure that the REF allele is set as the PLINK A2 allele.
 
 # :computer: Command line
 
@@ -75,8 +81,8 @@ Note that you can comment any line and option using "#" (the software will ignor
 
 **Mandatory options**
 
-- `genotypename: [STRING]` name of the input .geno file
-- `snpname: [STRING]` name of the input .snp file
+- `genotypename: [STRING]` name of the input .geno or .bed file
+- `snpname: [STRING]` name of the input .snp or .bim file
 - `indivname: [STRING]` name of the input .ind file
 - `outputprefix: [STRING]` prefix of the output file, ASCEND will automatically append the appropriate extensions
 - `targetpop: [STRING]` name of the target population to analyze

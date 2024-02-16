@@ -63,6 +63,8 @@ binette, ainsi le petit Rensky a fait le coquelicot." - Ubu Roi
 02 dec 2022: v10.1: from v10.0: np.float deprecated => changed to float
 09 dec 2022: v10.1.1: from v10.1: added a condition to check that the genetic pos column in the input *.snp file is properly formatted
                                   set np.seterr(invalid='ignore') to avoid the `RuntimeWarning: invalid value encountered in true_divide` warning
+30 jan 2024: v10.2.0: added parsing of PLINK .bed format instead of EIGENSTRAT .geno (and .bim instead of .snp), though the POP file is still needed,
+                      since PLINK .fam format does not contain population information
 
 NB.
 [070222] FFT-correlation is better at handling missing data than Naive-correlation (by construction), leading to more accurate If estimates (for Tf, it makes no difference).
@@ -72,7 +74,7 @@ Improvements.
 
 """
 
-___version___ = '10.1.1'
+___version___ = '10.2.0'
 
 import numpy as np
 import time, sys, warnings, io, os, argparse, random
@@ -829,7 +831,8 @@ def calculate_allele_sharing(input_prefix,
                              chrom_to_analyze = None,
                              randomhet = False,
                              seed = False,
-                             calculation_mode = "correlation"):
+                             calculation_mode = "correlation",
+                             count_A1 = False):
 
     start = time.time()
     if out_popname != None:
@@ -837,9 +840,12 @@ def calculate_allele_sharing(input_prefix,
     else:
         print2(flog, 'Analyzing only '+target_popname+', without outgroup')
 
+    snp_cols = [1,2]
+    if input_prefix[1].endswith('.bim'):
+        snp_cols = [0,2]
     D_FULL = pd.read_csv(input_prefix[1],
                          sep = '\s+',
-                         usecols = [1,2],
+                         usecols = snp_cols,
                          engine = 'c',
                          names = ['chrom', 'gpos'],
                          dtype = {'chrom': np.int16, 'gpos': np.float64},
@@ -898,17 +904,18 @@ def calculate_allele_sharing(input_prefix,
         chr_values = np.array(chrom_to_analyze)
     print2(flog, 'Chromosomes: '+' '.join([str(x) for x in chr_values])+'\n')
 
-    # v8.4: check that the geno file contains only values in [0, 1, 2, 9]
-    G = pd.read_fwf(input_prefix[0],
-                    colspecs = [(x,x+1) for x in list(range(len(POP)))],
-                    dtype = np.int8,
-                    nrows = 1000,
-                    header = None,
-                    na_filter = None).to_numpy()
-    G = np.unique(G)
-    if np.all(np.isin(G, np.array([0,1,2,9]))) == False:
-        sys.exit('Error. The geno file contains invalid genotype values (i.e. neither 0, 1, 2 nor 9)')
-    del G
+    if input_prefix[0].endswith('.geno') or input_prefix[0].endswith('.geno.gz'):
+        # v8.4: check that the geno file contains only values in [0, 1, 2, 9]
+        G = pd.read_fwf(input_prefix[0],
+                        colspecs = [(x,x+1) for x in list(range(len(POP)))],
+                        dtype = np.int8,
+                        nrows = 1000,
+                        header = None,
+                        na_filter = None).to_numpy()
+        G = np.unique(G)
+        if np.all(np.isin(G, np.array([0,1,2,9]))) == False:
+           sys.exit('Error. The geno file contains invalid genotype values (i.e. neither 0, 1, 2 nor 9)')
+        del G
 
     RR, first, nSNP_per_chrom = [], True, []
     for chrom in chr_values:
@@ -921,14 +928,35 @@ def calculate_allele_sharing(input_prefix,
         print2(flog, '\n\n>> Chrom:    '+str(chrom)+'   -~-   Range: ['+str(r0+1)+'; '+str(r1+1)+']')
         D = D_FULL[r0:(r1+1)]
 
-        G = pd.read_fwf(input_prefix[0],
-                    colspecs = [(x,x+1) for x in columns],
-                    dtype = np.int8,
-                    skiprows = int(r0),
-                    nrows = int(r1-r0+1),
-                    header = None,
-                    na_filter = None).to_numpy()
+        if input_prefix[0].endswith('.bed'):
+            #Handle PLINK .bed format using bed-reader:
+            from bed_reader import open_bed
+            #Note that we set count_A1=False, since REF is usually set to A2
+            # when converting VCF to PLINK, so the nref of EIGENSTRAT .geno
+            # is basically the count of A2 alleles.
+            #Also, bed-reader generates an ndarray in sample-major orientation,
+            # although the default memory layout is variant-major (idk why),
+            # so we need to transpose the resulting ndarray to match .geno.
+            with open_bed(input_prefix[0], count_A1=count_A1, num_threads=1) as bed:
+                G = bed.read(np.s_[columns,r0:(r1+1)],
+                        dtype = 'int8',
+                        num_threads = 1).transpose()
+                #bed-reader sets missing genotypes to -127 when dtype='int8',
+                # so we need to make sure to convert those to .geno's 9,
+                # since code below relies on it being 9:
+                G[G == -127] = 9
+        else:
+            G = pd.read_fwf(input_prefix[0],
+                        colspecs = [(x,x+1) for x in columns],
+                        dtype = np.int8,
+                        skiprows = int(r0),
+                        nrows = int(r1-r0+1),
+                        header = None,
+                        na_filter = None).to_numpy()
 
+        #Debugging:
+        #print2(flog, '\nInitial G dimensions: ('+str(G.shape[0])+','+str(G.shape[1])+')')
+        #np.savetxt(output_prefix+'_chr'+str(chrom)+'_initialG.tsv', G, delimiter='\t')
         # v9.0: check if pseudodiploid
         ug = np.unique(G[:,target_cols])
         ug_all = ug
@@ -968,6 +996,8 @@ def calculate_allele_sharing(input_prefix,
             G_out = cp(G[:,outgroup_cols])
             nh_2 = G_out.shape[1]
         G = G[:,target_cols]
+        #Debugging:
+        #print2(flog, '\nG dimensions after pseudodiploidization and outgroup handling: ('+str(G.shape[0])+','+str(G.shape[1])+')')
 
         #########
 
@@ -1025,6 +1055,9 @@ def calculate_allele_sharing(input_prefix,
         nSNP_raw = G.shape[0]
         D = D[goods]
         G = G[goods,:][0]
+        #Debugging:
+        #print2(flog, '\nG dimensions after MAF and missingness filtering: ('+str(G.shape[0])+','+str(G.shape[1])+')')
+        #np.savetxt(output_prefix+'_chr'+str(chrom)+'_filteredG.tsv', G, delimiter='\t')
 
         if out_popname != None:
             G_out = G_out[goods,:][0]
